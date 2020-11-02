@@ -930,7 +930,7 @@ class EmpiricalInferenceResults(InferenceResults):
         """
         lower = alpha / 2
         upper = 1 - alpha / 2
-        return np.percentile(self.pred_dist, lower, axis=0), np.percentile(self.pred_dist, upper, axis=0)
+        return np.percentile(self.pred_dist, lower * 100, axis=0), np.percentile(self.pred_dist, upper * 100, axis=0)
 
     def pvalue(self, value=0):
         """
@@ -949,7 +949,8 @@ class EmpiricalInferenceResults(InferenceResults):
             the corresponding singleton dimensions in the output will be collapsed
             (e.g. if both are vectors, then the output of this method will also be a vector)
         """
-        return min((self.pred_dist < value).sum(), (self.pred_dist > value).sum()) / self.pred_dist.shape[0]
+        return np.minimum((self.pred_dist < value).sum(axis=0),
+                          (self.pred_dist > value).sum(axis=0)) / self.pred_dist.shape[0]
 
     def _expand_outputs(self, n_rows):
         assert shape(self.pred)[0] == shape(self.pred_dist)[1] == 1

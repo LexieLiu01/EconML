@@ -187,14 +187,20 @@ class BootstrapEstimator:
                 return call
 
         def get_inference():
-            # can't import from econml.inference at top level without creating mutual dependencies
-            from .inference import EmpiricalInferenceResults
+            # can't import from econml.inference at top level without creating cyclical dependencies
+            from .inference import EmpiricalInferenceResults, NormalInferenceResults
 
             prefix = name[: - len("_inference")]
+            fname_transformer = None
+
             if prefix in ['const_marginal_effect', 'marginal_effect', 'effect']:
                 inf_type = 'effect'
             elif prefix == 'coef_':
                 inf_type = 'coefficient'
+                if (hasattr(self._instances[0], 'cate_feature_names') and
+                        callable(self._instances[0].cate_feature_names)):
+                    def fname_transformer(x):
+                        return self._instances[0].cate_feature_names(x)
             elif prefix == 'intercept_':
                 inf_type = 'intercept'
             else:
@@ -204,6 +210,8 @@ class BootstrapEstimator:
             d_t = 1 if prefix == 'effect' else d_t
             d_y = self._wrapped._d_y[0] if self._wrapped._d_y else 1
 
+            can_call = callable(getattr(self._instances[0], prefix))
+
             def get_inference_nonparametric(kind):
                 def get_dist(est, arr):
                     if kind == 'percentile':
@@ -212,21 +220,31 @@ class BootstrapEstimator:
                         return 2 * est - arr
                     else:
                         raise ValueError("Invalid kind, must be either 'percentile' or 'pivot'")
-                return proxy(callable(getattr(self._instances[0], prefix)), prefix,
-                             lambda arr, est: EmpiricalInferenceResults(d_t=d_t, d_y=d_y,
-                                                                        pred=est, pred_dist=get_dist(est, arr),
-                                                                        inf_type=inf_type, fname_transformer=None))
 
-            def get_inference_parametric():
+                result = proxy(can_call, prefix,
+                               lambda arr, est: EmpiricalInferenceResults(d_t=d_t, d_y=d_y,
+                                                                          pred=est, pred_dist=get_dist(est, arr),
+                                                                          inf_type=inf_type,
+                                                                          fname_transformer=fname_transformer))
+                # Note that inference results are always methods even if the inference is for a property
+                # (e.g. coef__inference() is a method but coef_ is a property)
+                # Therefore we must insert a lambda if getting inference for a non-callable
+                return result if can_call else lambda: result
+
+            def get_inference_parametric(*args, **kwargs):
                 pred = getattr(self._wrapped, prefix)
+                if can_call:
+                    pred = pred(*args, **kwargs)
                 stderr = getattr(self, prefix + '_std')
+                if can_call:
+                    stderr = stderr(*args, **kwargs)
                 return NormalInferenceResults(d_t=d_t, d_y=d_y, pred=pred,
                                               pred_stderr=stderr, inf_type=inf_type,
-                                              pred_dist=None, fname_transformer=None)
+                                              fname_transformer=fname_transformer)
 
-            return {'normal': get_inference_parametric,
-                    'percentile': lambda: get_inference_nonparametric('percentile'),
-                    'pivot': lambda: get_inference_nonparametric('pivot')}[self._bootstrap_type]
+            return {'normal': get_inference_parametric if can_call else lambda: get_inference_parametric(),
+                    'percentile': get_inference_nonparametric('percentile'),
+                    'pivot': get_inference_nonparametric('pivot')}[self._bootstrap_type]
 
         caught = None
         m = None
